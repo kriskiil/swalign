@@ -2,9 +2,7 @@
 '''
 Simple Smith-Waterman aligner
 '''
-import sys
-import StringIO
-
+import sys, StringIO, bisect
 
 class ScoringMatrix(object):
     '''
@@ -60,6 +58,22 @@ class ScoringMatrix(object):
 
         return self.scores[(one_idx * self.base_count) + two_idx]
 
+class NumPyMatrix(object):
+    def __init__(self, rows, cols, init=None):
+        self.rows = rows
+        self.cols = cols
+
+        self.a = array(full((rows, cols), init[0], dtype=np.int))
+        self.b = array(full((rows, cols), init[1], dtype=np.str))
+        self.c = array(full((rows, cols), init[2], dtype=np.int))
+
+    def get(self, row, col):
+        return (self.a[row,col], self.b[row,col], self.c[row,col])
+
+    def set(self, row, col, val):
+        self.a[row,col] = val[0]
+        self.b[row,col] = val[1]
+        self.c[row,col] = val[2]
 
 class IdentityScoringMatrix(object):
     def __init__(self, match=1, mismatch=-1):
@@ -76,7 +90,6 @@ class IdentityScoringMatrix(object):
 
 NucleotideScoringMatrix = IdentityScoringMatrix
 
-
 class Matrix(object):
     def __init__(self, rows, cols, init=None):
         self.rows = rows
@@ -89,9 +102,40 @@ class Matrix(object):
     def set(self, row, col, val):
         self.values[(row * self.cols) + col] = val
 
+class AlignmentPool:
+    """
+    Kind of like a priority queue of tuples except once it fills up, the element
+    with the lowest "priority" will be discarded
+    """
+    def __init__(self, max_size):
+        self.max_size = max_size
+        self.list = []
+    def put(self, elem):
+        #ordering cheat
+        elem = self._change_ordering(elem)
+        #insert in order
+        bisect.insort_left(self.list, elem)
+        #if we overflow
+        if(len(self.list) > self.max_size):
+            del self.list[self.max_size-1] #delete the overflowing elem
+    def get(self):
+        try:
+            elem = self._change_ordering(self.list[0])
+            #remove top element
+            self.list = self.list[1:]
+            return elem
+        except IndexError, e: #not workign!
+            return None
+        #restore ordering values
+    def empty(self):
+        return not self.list
+    def _change_ordering(self, elem):
+        elem = list(elem)
+        elem[0] *= -1
+        return tuple(elem)
 
 class LocalAlignment(object):
-    def __init__(self, scoring_matrix, gap_penalty=-1, gap_extension_penalty=-1, gap_extension_decay=0.0, prefer_gap_runs=True, verbose=False, globalalign=False, wildcard=None, full_query=False):
+    def __init__(self, scoring_matrix, gap_penalty=-1, num_alignments=10, gap_extension_penalty=-1, gap_extension_decay=0.0, prefer_gap_runs=True, verbose=False, globalalign=False, wildcard=None, full_query=False):
         self.scoring_matrix = scoring_matrix
         self.gap_penalty = gap_penalty
         self.gap_extension_penalty = gap_extension_penalty
@@ -101,8 +145,13 @@ class LocalAlignment(object):
         self.globalalign = globalalign
         self.wildcard = wildcard
         self.full_query = full_query
+        self.num_alignments = num_alignments
+
+        print 'here' + self.verbose
 
     def align(self, ref, query, ref_name='', query_name='', rc=False):
+        #pool to hold the top num_alignments alignments
+        pool = AlignmentPool(self.num_alignments)
         orig_ref = ref
         orig_query = query
 
@@ -177,75 +226,87 @@ class LocalAlignment(object):
                 else:
                     val = (0, 'x', 0)
 
-                if val[0] >= max_val:
+                if val[0] >= max_val and val[0] > 0:
                     max_val = val[0]
                     max_row = row
                     max_col = col
+                    #add to the pool
+                    pool.put((max_val, max_row, max_col))
 
                 matrix.set(row, col, val)
-
-        # backtrack
-        if self.globalalign:
-            # backtrack from last cell
-            row = matrix.rows - 1
-            col = matrix.cols - 1
-            val = matrix.get(row, col)[0]
-        elif self.full_query:
-            # backtrack from max in last row
-            row = matrix.rows - 1
-            max_val = 0
-            col = 0
-            for c in xrange(1, matrix.cols):
-                if matrix.get(row, c)[0] > max_val:
-                    col = c
-                    max_val = matrix.get(row, c)[0]
-            col = matrix.cols - 1
-            val = matrix.get(row, col)[0]
-        else:
-            # backtrack from max
-            row = max_row
-            col = max_col
-            val = max_val
-
-        op = ''
-        aln = []
-
-        path = []
-        while True:
-            val, op, runlen = matrix.get(row, col)
-
+        #list for final alignments
+        alignments = []
+        #process each alignment in the pool
+        while not pool.empty():
+            current = pool.get()
+            max_val = current[0]
+            max_row = current[1]
+            max_col = current[2]
+            # backtrack
             if self.globalalign:
-                if row == 0 and col == 0:
-                    break
+                # backtrack from last cell
+                row = matrix.rows - 1
+                col = matrix.cols - 1
+                val = matrix.get(row, col)[0]
             elif self.full_query:
-                if row == 0:
-                    break
+                # backtrack from max in last row
+                row = matrix.rows - 1
+                max_val = 0
+                col = 0
+                for c in xrange(1, matrix.cols):
+                    if matrix.get(row, c)[0] > max_val:
+                        col = c
+                        max_val = matrix.get(row, c)[0]
+                col = matrix.cols - 1
+                val = matrix.get(row, col)[0]
             else:
-                if val <= 0:
+                # backtrack from max
+                row = max_row
+                col = max_col
+                val = max_val
+
+            op = ''
+            aln = []
+
+            path = []
+            while True:
+                val, op, runlen = matrix.get(row, col)
+
+                if self.globalalign:
+                    if row == 0 and col == 0:
+                        break
+                elif self.full_query:
+                    if row == 0:
+                        break
+                else:
+                    if val <= 0:
+                        break
+
+                path.append((row, col))
+                aln.append(op)
+
+                if op == 'm':
+                    row -= 1
+                    col -= 1
+                elif op == 'i':
+                    row -= 1
+                elif op == 'd':
+                    col -= 1
+                else:
                     break
 
-            path.append((row, col))
-            aln.append(op)
+            aln.reverse()
+            if self.verbose:
+                self.dump_matrix(ref, query, matrix, path)
+                print aln
+                print (max_row, max_col), max_val
 
-            if op == 'm':
-                row -= 1
-                col -= 1
-            elif op == 'i':
-                row -= 1
-            elif op == 'd':
-                col -= 1
-            else:
-                break
+            cigar = _reduce_cigar(aln)
 
-        aln.reverse()
+            alignment = Alignment(orig_query, orig_ref, row, col, cigar, max_val, ref_name, query_name, rc, self.globalalign, self.wildcard)
+            alignments.append(alignment)
 
-        if self.verbose:
-            self.dump_matrix(ref, query, matrix, path)
-            print aln
-            print (max_row, max_col), max_val
-
-        cigar = _reduce_cigar(aln)
-        return Alignment(orig_query, orig_ref, row, col, cigar, max_val, ref_name, query_name, rc, self.globalalign, self.wildcard)
+        return alignments
 
     def dump_matrix(self, ref, query, matrix, path, show_row=-1, show_col=-1):
         sys.stdout.write('      -      ')
@@ -264,7 +325,6 @@ class LocalAlignment(object):
                     sys.stdout.write(' %5s%s%s' % (matrix.get(row, col)[0], matrix.get(row, col)[1], '$' if (row, col) in path else ' '))
             sys.stdout.write('\n')
 
-
 def _reduce_cigar(operations):
     count = 1
     last = None
@@ -281,18 +341,15 @@ def _reduce_cigar(operations):
         ret.append((count, last.upper()))
     return ret
 
-
 def _cigar_str(cigar):
     out = ''
     for num, op in cigar:
         out += '%s%s' % (num, op)
     return out
 
-
 class Alignment(object):
     def __init__(self, query, ref, q_pos, r_pos, cigar, score, ref_name='', query_name='', rc=False, globalalign=False, wildcard=None):
-        self.query = query
-        self.ref = ref
+        self.compressed = False
         self.q_pos = q_pos
         self.r_pos = r_pos
         self.cigar = cigar
@@ -349,6 +406,28 @@ class Alignment(object):
         else:
             self.identity = 0
 
+    # def compress(self):
+    #     """
+    #     Deletes the objects copy of the genomes to save memory to allow lots
+    #     of alignments to be stored in a list in memory
+    #     """
+    #     self.ref = None
+    #     self.orig_ref = None
+    #     self.query = None
+    #     self.orig_quer = None
+    #     self.compressed = True
+    #
+    # def decompress(self, query, ref):
+    #     """
+    #     Adds back the genomes being aligned
+    #     """
+    #     self.orig_query = query
+    #     self.query = query.upper()
+    #
+    #     self.orig_ref = ref
+    #     self.ref = ref.upper()
+    #     self.compressed = False
+
     def set_ref_offset(self, ref, offset, region):
         self.r_name = ref
         self.r_offset = offset
@@ -356,6 +435,8 @@ class Alignment(object):
 
     @property
     def extended_cigar_str(self):
+        if self.compressed:
+            raise Exception('Alignment is compressed')
         qpos = 0
         rpos = 0
         ext_cigar_str = ''
@@ -386,9 +467,13 @@ class Alignment(object):
 
     @property
     def cigar_str(self):
+        if self.compressed:
+            raise Exception('Alignment is compressed')
         return _cigar_str(self.cigar)
 
     def dump(self, wrap=None, out=sys.stdout):
+        if self.compressed:
+            raise Exception('Alignment is compressed')
         i = self.r_pos
         j = self.q_pos
 
@@ -506,7 +591,6 @@ class Alignment(object):
         out.write("Mismatches: %s\n" % (self.mismatches,))
         out.write("CIGAR: %s\n" % self.cigar_str)
 
-
 def fasta_gen(fname):
     def gen():
         seq = ''
@@ -542,13 +626,11 @@ def fasta_gen(fname):
             f.close()
     return gen
 
-
 def seq_gen(name, seq):
     def gen():
         yield (name, seq, '')
 
     return gen
-
 
 def extract_region(comments):
     ref = None
@@ -576,7 +658,6 @@ def extract_region(comments):
         return (ref, start - 1, '%s:%s-%s' % (ref, start, end))
 
     return None
-
 
 __revcomp = {}
 for a, b in zip('atcgATCGNn', 'tagcTAGCNn'):
