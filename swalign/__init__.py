@@ -307,21 +307,21 @@ class LocalAlignment(object):
         return alignments
 
     def dump_matrix(self, ref, query, matrix, path, show_row=-1, show_col=-1):
-        sys.stdout.write('      -      ')
-        sys.stdout.write('       '.join(ref))
-        sys.stdout.write('\n')
+        print('      -      ')
+        print('       '.join(ref))
+        print('\n')
         for row in xrange(matrix.rows):
             if row == 0:
-                sys.stdout.write('-')
+                print('-')
             else:
-                sys.stdout.write(query[row - 1])
+                print(query[row - 1])
 
             for col in xrange(matrix.cols):
                 if show_row == row and show_col == col:
-                    sys.stdout.write('       *')
+                    print('       *')
                 else:
-                    sys.stdout.write(' %5s%s%s' % (matrix.get(row, col)[0], matrix.get(row, col)[1], '$' if (row, col) in path else ' '))
-            sys.stdout.write('\n')
+                    print(' %5s%s%s' % (matrix.get(row, col)[0], matrix.get(row, col)[1], '$' if (row, col) in path else ' '))
+            print('\n')
 
 def _reduce_cigar(operations):
     count = 1
@@ -469,7 +469,7 @@ class Alignment(object):
             raise Exception('Alignment is compressed')
         return _cigar_str(self.cigar)
 
-    def dump(self, wrap=None, out=sys.stdout):
+    def dump(self, wrap=None):
         if self.compressed:
             raise Exception('Alignment is compressed')
         i = self.r_pos
@@ -516,12 +516,12 @@ class Alignment(object):
                 m += '    '
 
         if self.q_name:
-            out.write('Query: %s%s (%s nt)\n' % (self.q_name, ' (reverse-compliment)' if self.rc else '', len(self.query)))
+            print('Query: %s%s (%s nt)\n' % (self.q_name, ' (reverse-compliment)' if self.rc else '', len(self.query)))
         if self.r_name:
             if self.r_region:
-                out.write('Ref  : %s (%s)\n\n' % (self.r_name, self.r_region))
+                print('Ref  : %s (%s)\n\n' % (self.r_name, self.r_region))
             else:
-                out.write('Ref  : %s (%s nt)\n\n' % (self.r_name, len(self.ref)))
+                print('Ref  : %s (%s nt)\n\n' % (self.r_name, len(self.ref)))
 
         poslens = [self.q_pos + 1, self.q_end + 1, self.r_pos + self.r_offset + 1, self.r_end + self.r_offset + 1]
         maxlen = max([len(str(x)) for x in poslens])
@@ -538,9 +538,9 @@ class Alignment(object):
 
         while q and r and m:
             if not self.rc:
-                out.write(q_pre % (qpos + 1))  # pos is displayed as 1-based
+                print(q_pre % (qpos + 1))  # pos is displayed as 1-based
             else:
-                out.write(q_pre % (qpos))  # revcomp is 1-based on the 3' end
+                print(q_pre % (qpos))  # revcomp is 1-based on the 3' end
 
             if wrap:
                 qfragment = q[:wrap]
@@ -559,7 +559,7 @@ class Alignment(object):
                 m = ''
                 r = ''
 
-            out.write(qfragment)
+            print(qfragment)
             if not self.rc:
                 for base in qfragment:
                     if base != '-':
@@ -570,24 +570,24 @@ class Alignment(object):
                         qpos -= 1
 
             if not self.rc:
-                out.write(' %s\n' % qpos)
+                print(' %s\n' % qpos)
             else:
-                out.write(' %s\n' % (qpos + 1))
+                print(' %s\n' % (qpos + 1))
 
-            out.write(m_pre)
-            out.write(mfragment)
-            out.write('\n')
-            out.write(r_pre % (rpos + self.r_offset + 1))
-            out.write(rfragment)
+            print(m_pre)
+            print(mfragment)
+            print('\n')
+            print(r_pre % (rpos + self.r_offset + 1))
+            print(rfragment)
             for base in rfragment:
                 if base != '-':
                     rpos += 1
-            out.write(' %s\n\n' % (rpos + self.r_offset))
+            print(' %s\n\n' % (rpos + self.r_offset))
 
-        out.write("Score: %s\n" % self.score)
-        out.write("Matches: %s (%.1f%%)\n" % (self.matches, self.identity * 100))
-        out.write("Mismatches: %s\n" % (self.mismatches,))
-        out.write("CIGAR: %s\n" % self.cigar_str)
+        print("Score: %s\n" % self.score)
+        print("Matches: %s (%.1f%%)\n" % (self.matches, self.identity * 100))
+        print("Mismatches: %s\n" % (self.mismatches,))
+        print("CIGAR: %s\n" % self.cigar_str)
 
 def fasta_gen(fname):
     def gen():
