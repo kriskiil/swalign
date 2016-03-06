@@ -147,8 +147,6 @@ class LocalAlignment(object):
         self.full_query = full_query
         self.num_alignments = num_alignments
 
-        print 'here' + self.verbose
-
     def align(self, ref, query, ref_name='', query_name='', rc=False):
         #pool to hold the top num_alignments alignments
         pool = AlignmentPool(self.num_alignments)
