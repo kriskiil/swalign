@@ -2,7 +2,7 @@
 '''
 Simple Smith-Waterman aligner
 '''
-import sys, StringIO, bisect
+import sys, StringIO, bisect, math
 
 class ScoringMatrix(object):
     '''
@@ -107,17 +107,21 @@ class AlignmentPool:
     Kind of like a priority queue of tuples except once it fills up, the element
     with the lowest "priority" will be discarded
     """
-    def __init__(self, max_size):
+    def __init__(self, max_size, threshold):
         self.max_size = max_size
+        self.threshold = threshold
+        self.valid_count = 0
         self.list = []
     def put(self, elem):
-        #ordering cheat
-        elem = self._change_ordering(elem)
-        #insert in order
-        bisect.insort_left(self.list, elem)
-        #if we overflow
-        if(len(self.list) > self.max_size):
-            del self.list[self.max_size-1] #delete the overflowing elem
+        if elem[0] >= self.threshold:
+            self.valid_count += 1
+            #ordering cheat
+            elem = self._change_ordering(elem)
+            #insert in order
+            bisect.insort_left(self.list, elem)
+            #if we overflow
+            if(len(self.list) > self.max_size):
+                del self.list[self.max_size-1] #delete the overflowing elem
     def get(self):
         try:
             elem = self._change_ordering(self.list[0])
@@ -135,7 +139,7 @@ class AlignmentPool:
         return tuple(elem)
 
 class LocalAlignment(object):
-    def __init__(self, scoring_matrix, gap_penalty=-1, num_alignments=10, gap_extension_penalty=-1, gap_extension_decay=0.0, prefer_gap_runs=True, verbose=False, globalalign=False, wildcard=None, full_query=False):
+    def __init__(self, scoring_matrix, gap_penalty=-1, num_alignments=10, alignment_quality=90, gap_extension_penalty=-1, gap_extension_decay=0.0, prefer_gap_runs=True, verbose=False, globalalign=False, wildcard=None, full_query=False):
         self.scoring_matrix = scoring_matrix
         self.gap_penalty = gap_penalty
         self.gap_extension_penalty = gap_extension_penalty
@@ -146,10 +150,13 @@ class LocalAlignment(object):
         self.wildcard = wildcard
         self.full_query = full_query
         self.num_alignments = num_alignments
+        self.alignment_quality = alignment_quality
 
     def align(self, ref, query, ref_name='', query_name='', rc=False):
+        #calculate acceptance threshold for countable alignment
+        threshold = math.floor(((len(query)*self.scoring_matrix.match)/100.0)*self.alignment_quality)
         #pool to hold the top num_alignments alignments
-        pool = AlignmentPool(self.num_alignments)
+        pool = AlignmentPool(self.num_alignments, threshold)
         orig_ref = ref
         orig_query = query
 
@@ -304,7 +311,7 @@ class LocalAlignment(object):
             alignment = Alignment(orig_query, orig_ref, row, col, cigar, max_val, ref_name, query_name, rc, self.globalalign, self.wildcard)
             alignments.append(alignment)
 
-        return alignments
+        return (pool.valid_count, alignments)
 
     def dump_matrix(self, ref, query, matrix, path, show_row=-1, show_col=-1):
         print('      -      ')
@@ -469,7 +476,7 @@ class Alignment(object):
             raise Exception('Alignment is compressed')
         return _cigar_str(self.cigar)
 
-    def dump(self, wrap=None):
+    def dump(self, wrap=None, out=sys.stdout):
         if self.compressed:
             raise Exception('Alignment is compressed')
         i = self.r_pos
@@ -516,31 +523,30 @@ class Alignment(object):
                 m += '    '
 
         if self.q_name:
-            print('Query: %s%s (%s nt)\n' % (self.q_name, ' (reverse-compliment)' if self.rc else '', len(self.query)))
+            out.write('Query: %s%s (%s nt)\n' % (self.q_name, ' (reverse-compliment)' if self.rc else '', len(self.query)))
         if self.r_name:
             if self.r_region:
-                print('Ref  : %s (%s)\n\n' % (self.r_name, self.r_region))
+                out.write('Ref  : %s (%s)\n\n' % (self.r_name, self.r_region))
             else:
-                print('Ref  : %s (%s nt)\n\n' % (self.r_name, len(self.ref)))
+                out.write('Ref  : %s (%s nt)\n\n' % (self.r_name, len(self.ref)))
 
         poslens = [self.q_pos + 1, self.q_end + 1, self.r_pos + self.r_offset + 1, self.r_end + self.r_offset + 1]
         maxlen = max([len(str(x)) for x in poslens])
-
+        output = {}
         q_pre = 'Query: %%%ss ' % maxlen
         r_pre = 'Ref  : %%%ss ' % maxlen
         m_pre = ' ' * (8 + maxlen)
-
         rpos = self.r_pos
         if not self.rc:
             qpos = self.q_pos
         else:
             qpos = self.q_end
-
+        output['qs'] = qpos
         while q and r and m:
             if not self.rc:
-                print(q_pre % (qpos + 1))  # pos is displayed as 1-based
+                out.write(q_pre % (qpos + 1))  # pos is displayed as 1-based
             else:
-                print(q_pre % (qpos))  # revcomp is 1-based on the 3' end
+                out.write(q_pre % (qpos))  # revcomp is 1-based on the 3' end
 
             if wrap:
                 qfragment = q[:wrap]
@@ -559,7 +565,7 @@ class Alignment(object):
                 m = ''
                 r = ''
 
-            print(qfragment)
+            out.write(qfragment)
             if not self.rc:
                 for base in qfragment:
                     if base != '-':
@@ -570,25 +576,30 @@ class Alignment(object):
                         qpos -= 1
 
             if not self.rc:
-                print(' %s\n' % qpos)
+                out.write(' %s\n' % qpos)
             else:
-                print(' %s\n' % (qpos + 1))
-
-            print(m_pre)
-            print(mfragment)
-            print('\n')
-            print(r_pre % (rpos + self.r_offset + 1))
-            print(rfragment)
+                out.write(' %s\n' % (qpos + 1))
+            output['qe'] = qpos
+            out.write(m_pre)
+            out.write(mfragment)
+            out.write('\n')
+            out.write(r_pre % (rpos + self.r_offset + 1))
+            out.write(rfragment)
+            output['rs'] = rpos
             for base in rfragment:
                 if base != '-':
                     rpos += 1
-            print(' %s\n\n' % (rpos + self.r_offset))
-
-        print("Score: %s\n" % self.score)
-        print("Matches: %s (%.1f%%)\n" % (self.matches, self.identity * 100))
-        print("Mismatches: %s\n" % (self.mismatches,))
-        print("CIGAR: %s\n" % self.cigar_str)
-
+            output['re'] = rpos
+            output['c'] = self.cigar_str
+            out.write(' %s\n\n' % (rpos + self.r_offset))
+        output['s'] = self.score
+        out.write("Score: %s\n" % self.score)
+        out.write("Matches: %s (%.1f%%)\n" % (self.matches, self.identity * 100))
+        output['m'] = self.matches
+        out.write("Mismatches: %s\n" % (self.mismatches,))
+        output['mm'] = self.mismatches
+        out.write("CIGAR: %s\n" % self.cigar_str)
+        return output
 def fasta_gen(fname):
     def gen():
         seq = ''
