@@ -2,7 +2,7 @@
 '''
 Simple Smith-Waterman aligner
 '''
-import sys, StringIO, bisect, math
+import sys, StringIO, bisect, math, os
 
 class ScoringMatrix(object):
     '''
@@ -476,7 +476,7 @@ class Alignment(object):
             raise Exception('Alignment is compressed')
         return _cigar_str(self.cigar)
 
-    def dump(self, wrap=None, out=sys.stdout):
+    def dump(self, wrap=None, out=open(os.devnull, 'w')):
         if self.compressed:
             raise Exception('Alignment is compressed')
         i = self.r_pos
